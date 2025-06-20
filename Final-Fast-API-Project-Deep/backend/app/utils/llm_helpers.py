@@ -352,7 +352,7 @@ def build_analysis_prompt(user_query: str, schema_info: str, overview_stats: str
     Unified and intelligent LLM prompt to support:
     - Summary generation
     - Plain-language insights
-    - SQL query construction
+    - SQL query construction with robust subquery support
     """
     return f'''
 You are an expert AI data analyst assisting a business user in understanding or querying their data.
@@ -380,7 +380,7 @@ Your job is to:
 📌 DECISION LOGIC
 =======================
 
-1. 🔍 If user wants a **summary** (e.g. "summarize the data", "describe this dataset"):
+1. 🔍 If the user wants a **summary** (e.g. "summarize the data", "describe this dataset"):
    - Describe what the dataset contains
    - Highlight column types (numeric, categorical, dates)
    - Mention row/column count, uniqueness, or missing values
@@ -388,20 +388,31 @@ Your job is to:
    - Start your response with:
      SUMMARY:
 
-2. 📊 If user asks for **insights** (e.g. "what trends do you see", "what are the top groups", "what stands out"):
+2. 📊 If the user asks for **insights** (e.g. "what trends do you see", "what are the top groups", "what stands out"):
    - Provide helpful analysis in plain English
    - Mention dominant patterns, spikes, anomalies, common values
    - DO NOT return SQL
    - Start your response with:
      INSIGHTS:
 
-3. 🧠 If user is asking for **data retrieval, filtering, aggregations, group-by**, etc.:
+3. 🧠 If the user is asking for **data retrieval, filtering, aggregations, rankings, or comparisons**, such as:
+   - totals, averages, minimums, maximums
+   - comparisons between groups (e.g., "more than average", "top 3", "second highest")
+   - identifying specific rows that match ranked results
+
+Then:
    - Write a SELECT-only SQL query
-   - Use inferred filters, proper WHERE clauses, column aliases
-   - Avoid SELECT *
-   - Include plain explanation in English
-   - Return output like this:
-   - DO NOT use SQL for mean, median, mode, standard deviation — those will be handled by data analysis.
+   - Use inferred filters, proper WHERE and GROUP BY clauses, and column aliases
+   - ✅ If user asks about "common", "typical", or "frequent" patterns across groups (e.g. conditions in high-mortality centers), use **AVG(...)** across filtered groups — not raw rows
+   - ❌ Avoid using `LIMIT 1` unless the user clearly asks for a single example or center
+   - ✅ For comparisons like "higher than average", use a subquery with `AVG(...)`
+   - ❌ Do NOT use SELECT *
+   - ✅ Use subqueries where needed, especially for:
+       - comparing aggregates (e.g., admissions > average admissions)
+       - computing RATES such as "sepsis rate", "oxygen usage rate", or any percentage: use numerator / denominator (e.g., death_sepsis / total_treated), cast as FLOAT and handle division-by-zero safely (use NULLIF)
+       - finding top or second-best entries (avoid LIMIT N, OFFSET tricks like LIMIT 1,1)
+       - filtering by ranked or aggregated values (e.g., WHERE x = (SELECT MAX(...)))
+   - ❌ Do NOT write SQL for mean, median, mode, standard deviation — those are handled separately by the analysis engine
 
 SQL:
 [START SQL]
@@ -412,7 +423,19 @@ GROUP BY ...
 [END SQL]
 
 EXPLANATION:
-<Explain in 1-2 lines what the query does in plain English>
+You are a professional data analyst presenting this result to a non-technical business stakeholder (like a product manager, CEO, or client).
+
+Write a **short and clear explanation** of what this SQL result tells us, in business terms.
+
+🧠 Guidelines:
+- DO NOT mention SQL syntax or terms like SELECT, GROUP BY, JOIN, etc.
+- Focus on **what the result reveals or answers** (e.g., total counts, comparisons, trends).
+- Be **confident, natural, and helpful**, like you're in a business meeting.
+- Use column names **only if needed**, and always in simple, readable form.
+- Keep it **1–2 sentences max**. Avoid technical jargon completely.
+
+🎯 Goal: Help the business user make sense of the result, and decide what to do next.
+
 
 =======================
 🚫 RULES
@@ -420,13 +443,39 @@ EXPLANATION:
 
 - DO NOT write INSERT, UPDATE, DELETE queries
 - DO NOT use SELECT *
-- Output must follow one of the 3 expected formats:
+- DO NOT mention SQL structure in EXPLANATION
+- Your response must follow one of the 3 formats:
   → SUMMARY: ...
   → INSIGHTS: ...
   → SQL + EXPLANATION
 
-If unsure, use SUMMARY as the default fallback.
+If unsure of the user's intent, default to providing a SUMMARY.
+
+=======================
+📌 EXAMPLE — SUBQUERY REFERENCE
+=======================
+
+Q: Which districts have more total admissions than the average total admissions across all districts?
+
+SQL:
+[START SQL]
+SELECT district, SUM(admission) AS total_admissions
+FROM childhealthdatafortesting_1_sheet1
+GROUP BY district
+HAVING SUM(admission) > (
+    SELECT AVG(total)
+    FROM (
+        SELECT SUM(admission) AS total
+        FROM childhealthdatafortesting_1_sheet1
+        GROUP BY district
+    ) AS district_totals
+);
+[END SQL]
+
+EXPLANATION:
+This shows only the districts where total admissions are above the average of all district totals.
     '''.strip()
+
 
 
 def generate_non_sql_response(user_query: str, overview_stats: str, sample_df: pd.DataFrame, llm_instance) -> dict:
@@ -454,10 +503,26 @@ Your goal is to provide a **clear, useful, and user-friendly response** to the u
 
 Adapt your answer based on the user's intent. Consider the following rules:
 
-1. 🔹 If the user asked for a **summary**:
-   - Describe what this dataset is about (domain, scope, key figures)
-   - Include 3–5 bullet points that highlight key metrics (totals, averages, highs/lows)
-   - Mention major patterns or structure (e.g., "mostly from X region", or "wide range in admissions")
+1. 🔍 If the user asks for a **summary** (e.g. "summarize the data", "generate a summary about the dataset", "give me a data overview"):
+
+- Respond in a structured format that’s friendly for business and non-technical users.
+- Keep it concise (max 6–8 lines).
+- Use natural, plain English.
+- Organize the response with visual headings and bullet points.
+
+Use this format:
+
+📊 Dataset Overview  
+<Brief 1–2 sentence summary of what the dataset is about — include context like department, timeframe, and type of metrics tracked.>
+
+📌 Key Highlights:
+- <Highlight 1: State a meaningful metric or insight (e.g., "Most admissions were recorded in District X.")>
+- <Highlight 2: State another trend, average, or outlier in plain language>
+- <Highlight 3: Continue with 2–3 more bullet points showing trends, patterns, or anomalies>
+- <Avoid technical language like standard deviation, null values, or schema terms>
+
+✅ End the summary with a final takeaway if possible:
+
 
 2. 🔹 If the user asked for **insights, patterns, trends, or what stands out**:
    - Focus on differences, spikes, trends, or anomalies
@@ -652,3 +717,52 @@ Optionally, include one line explanation like:
 <explanation>
 [END EXPLANATION]
 """
+
+
+def is_follow_up_query(current_query: str, last_query: str, model) -> bool:
+    prompt = f"""
+You are a smart assistant. Tell me if the second question depends on the first.
+
+Previous Question: "{last_query}"
+Current Question: "{current_query}"
+
+Reply only with 'yes' or 'no'.
+"""
+    try:
+        response = model(prompt)
+        return "yes" in response.lower()
+    except Exception:
+        return False
+
+def is_query_contextual(new_query: str, last_query: str, last_answer: str, model) -> bool:
+    prompt = f"""
+Decide if the following user query depends on the previous one.
+
+Previous question: "{last_query}"
+Answer: "{last_answer}"
+Current question: "{new_query}"
+
+Is the current query a follow-up that refers to the previous context?
+
+Answer only: yes or no.
+"""
+    try:
+        response = model(prompt)
+        return "yes" in response.lower()
+    except Exception:
+        return False
+
+
+def build_context_aware_prompt(current_query, last_query, last_answer):
+    return f"""
+You are an assistant rewriting a user query to make it standalone.
+
+Previous query: "{last_query}"
+Answer: "{last_answer}"
+
+Now user asks: "{current_query}"
+
+Rewrite this into a full standalone question so it makes sense on its own.
+Only return the rewritten query.
+"""
+

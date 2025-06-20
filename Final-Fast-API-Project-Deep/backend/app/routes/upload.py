@@ -17,7 +17,7 @@ from fastapi import Depends
  
 from app.utils.data_processing import load_data, generate_table_name, get_data_preview
 from app.utils.cleaning import validate_data, clean_data, rename_case_conflict_columns
-from app.utils.llm_helpers import generate_data_issue_summary, GoogleGenerativeAI
+from app.utils.llm_helpers import generate_data_issue_summary
 from app.config import GOOGLE_API_KEY, MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST, MYSQL_DATABASE, MODEL_NAME
 from app.utils.auth_helpers import get_current_user
 from app.models import User
@@ -31,6 +31,9 @@ from app.database import SessionLocal
 from app.routes.auth import get_current_user  # Already imported in your file, if not, add it.
 # Make sure you import create_dynamic_database_for_user from auth.py if you wish to reuse it.
 from app.routes.auth import create_dynamic_database_for_user
+from app.utils.llm_factory import get_llm
+llm = get_llm()
+
  
 router = APIRouter()
 logger = logging.getLogger("upload")
@@ -44,7 +47,6 @@ ALLOWED_MIME_TYPES = [
 ]
  
 # Initialize the LLM instance using your API key.
-llm = GoogleGenerativeAI(model=MODEL_NAME, api_key=GOOGLE_API_KEY)
  
 # Create a SQLAlchemy engine with connection pooling for the main database.
 # (This engine is used only for file processing previews; final saving will use user-specific engines.)
@@ -327,7 +329,6 @@ async def clean_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    
     user_state = get_user_state(current_user.id)
 
     if not current_user.dynamic_db:
@@ -346,14 +347,21 @@ async def clean_file(
         if name == table_name:
             cleaned_df = clean_data(df.copy())
             cleaned_df = rename_case_conflict_columns(cleaned_df)
-            user_state.table_names[idx] = (table_name, cleaned_df)
+
+            # Update the table safely in user_state.table_names
+            for t_idx, (t_name, _) in enumerate(user_state.table_names):
+                if t_name == table_name:
+                    user_state.table_names[t_idx] = (table_name, cleaned_df)
+                    break
+            else:
+                user_state.table_names.append((table_name, cleaned_df))  # fallback
+
             try:
                 cleaned_df.to_sql(table_name, user_engine, index=False, if_exists="replace")
             except Exception as e:
                 logger.error(f"Error saving cleaned table {table_name}: {e}")
                 raise HTTPException(status_code=500, detail=f"Error saving cleaned table {table_name}: {e}")
 
-            # ✅ Generate suggested questions after saving
             try:
                 from app.utils.llm_helpers import generate_initial_suggestions_from_state, llm
                 suggestions = generate_initial_suggestions_from_state(llm, user_state)
@@ -371,17 +379,18 @@ async def clean_file(
 
     raise HTTPException(status_code=404, detail="Table not found")
 
- 
+
  
 # Similarly update the cancel_clean endpoint:
+
 @router.post("/cancel_clean")
 async def cancel_clean(
     table_name: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_state = get_user_state(current_user.id)  # ✅ Explicitly pass user ID here
-    
+    user_state = get_user_state(current_user.id)
+
     if not current_user.dynamic_db:
         dynamic_db_name = create_dynamic_database_for_user(current_user)
         current_user.dynamic_db = dynamic_db_name
@@ -398,6 +407,14 @@ async def cancel_clean(
         if name == table_name:
             if has_duplicate_columns(df):
                 df = rename_case_conflict_columns(df)
+
+            # Safely update or append in user_state.table_names
+            for t_idx, (t_name, _) in enumerate(user_state.table_names):
+                if t_name == table_name:
+                    user_state.table_names[t_idx] = (table_name, df)
+                    break
+            else:
+                user_state.table_names.append((table_name, df))
 
             max_retries = 3
             for attempt in range(max_retries):
@@ -419,7 +436,6 @@ async def cancel_clean(
 
             logger.info(f"Raw data for table {table_name} saved successfully (cancel cleaning).")
 
-            # ✅ Generate suggested questions after saving
             try:
                 from app.utils.llm_helpers import generate_initial_suggestions_from_state, llm
                 suggestions = generate_initial_suggestions_from_state(llm, user_state)

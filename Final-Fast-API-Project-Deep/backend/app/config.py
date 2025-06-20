@@ -20,4 +20,4 @@ DATABASE_URI = os.environ.get("DATABASE_URI")
 # JWT and authentication config
 SECRET_KEY = os.environ.get("SECRET_KEY", "your_default_secret_key")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))

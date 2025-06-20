@@ -34,17 +34,19 @@ class UserState:
             self.duckdb_conn = duckdb.connect(database=':memory:')
             self.last_active = datetime.utcnow()  # ✅ Refresh activity timestamp
 
-    def add_chat_entry(self, user_query, sql_query, result_df, max_history=5):
+    def add_chat_entry(self, user_query, resolved_query, sql_query, result_df, max_history=5):
         with self.lock:
             self.chat_history.append({
-                "user_query": user_query,
-                "sql_query": sql_query,
-                "result_preview": result_df.head(5).to_dict(orient="records"),
-                "timestamp": datetime.utcnow().isoformat()
+              "user_query": user_query,
+              "resolved_query": resolved_query,
+              "sql_query": sql_query,
+              "result_preview": result_df.head(5).to_dict(orient="records"),
+              "timestamp": datetime.utcnow().isoformat()
             })
-            if len(self.chat_history) > max_history:
-                self.chat_history = self.chat_history[-max_history:]
-            self.last_active = datetime.utcnow()
+        if len(self.chat_history) > max_history:
+            self.chat_history = self.chat_history[-max_history:]
+        self.last_active = datetime.utcnow()
+
 
     def get_last_chat_entry(self):
         with self.lock:

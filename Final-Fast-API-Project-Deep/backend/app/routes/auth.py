@@ -15,14 +15,9 @@ from app.database import SessionLocal
 from app.models import User
 from app.utils.db_helpers import connect_personal_db, load_tables_from_personal_db, list_tables
 from app.config import GOOGLE_API_KEY, MODEL_NAME
-from app.utils.llm_helpers import GoogleGenerativeAI
- 
-llm = GoogleGenerativeAI(model=MODEL_NAME, api_key=GOOGLE_API_KEY)
- 
- 
- 
- 
- 
+from app.utils.llm_factory import get_llm
+llm = get_llm()
+
 router = APIRouter()
 logger = logging.getLogger("auth")
 logger.setLevel(logging.INFO)
@@ -120,33 +115,51 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
  
  
  
+from fastapi import BackgroundTasks
+ 
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    from app.utils.llm_helpers import GoogleGenerativeAI, generate_initial_suggestions_from_state
-    from app.config import GOOGLE_API_KEY, MODEL_NAME
+def login(
+    background_tasks: BackgroundTasks,  # ✅ Now this is first
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
     from app.state import get_user_state
-
+    from app.config import ACCESS_TOKEN_EXPIRE_MINUTES
+ 
     user = get_user_by_email(db, form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
-    
-    # ✅ Get per-user state object
+ 
     user_state = get_user_state(user.id)
-
-    # ✅ Generate JWT access token
+ 
+    # JWT token generation
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username, "user_id": user.id},
         expires_delta=access_token_expires,
     )
-
-    logger.info(f"User '{user.username}' logged in.")
-
-    loaded_table_names = []
-
-    if user.dynamic_db:
-        from app.utils.db_helpers import connect_personal_db, load_tables_from_personal_db, list_tables
-
+ 
+    logger.info(f"User '{user.username}' authenticated successfully.")
+ 
+    # Background task for loading DB + LLM suggestions
+    background_tasks.add_task(initialize_user_context, user, user_state)
+ 
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "tables": []  # frontend should call /available_tables after a few seconds
+    }
+ 
+def initialize_user_context(user, user_state):
+    from app.utils.db_helpers import connect_personal_db, list_tables, load_tables_from_personal_db
+    from app.utils.llm_helpers import GoogleGenerativeAI, generate_initial_suggestions_from_state
+    from app.config import GOOGLE_API_KEY, MODEL_NAME, MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST
+ 
+    try:
+        if not user.dynamic_db:
+            logger.warning(f"No dynamic DB found for user {user.username}")
+            return
+ 
         engine = connect_personal_db(
             db_type="mysql",
             host=MYSQL_HOST,
@@ -154,37 +167,34 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             password=MYSQL_PASSWORD,
             database=user.dynamic_db
         )
-
-        if engine:
-            table_names = list_tables(engine)
-            loaded, original = load_tables_from_personal_db(engine, table_names)
-
-            user_state.personal_engine = engine
-            user_state.table_names = loaded
-            user_state.original_table_names = original
-
-            loaded_table_names = [name for name, _ in loaded]
-            logger.info(f"Preloaded tables for user '{user.username}': {loaded_table_names}")
-
-            # ✅ Safe generation of initial suggestions
-            try:
-                llm = GoogleGenerativeAI(model=MODEL_NAME, api_key=GOOGLE_API_KEY)
-                suggestions = generate_initial_suggestions_from_state(llm, user_state)
-                user_state.initial_suggestions = suggestions
-                logger.info(f"Generated initial suggestions for user '{user.username}': {suggestions}")
-            except Exception as e:
-                logger.warning(f"Suggestion generation failed: {e}")
-                user_state.initial_suggestions = []
-
-        else:
-            logger.warning(f"Failed to connect to DB for user '{user.username}' on login.")
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "tables": loaded_table_names
-    }
-
+ 
+        if not engine:
+            logger.warning(f"Could not connect to DB for user {user.username}")
+            return
+ 
+        table_names = list_tables(engine)
+        loaded, original = load_tables_from_personal_db(engine, table_names)
+ 
+        user_state.personal_engine = engine
+        user_state.table_names = loaded
+        user_state.original_table_names = original
+ 
+        logger.info(f"Preloaded tables for user '{user.username}': {[name for name, _ in loaded]}")
+ 
+        # Generate LLM suggestions
+        try:
+            llm = GoogleGenerativeAI(model=MODEL_NAME, api_key=GOOGLE_API_KEY)
+            suggestions = generate_initial_suggestions_from_state(llm, user_state)
+            user_state.initial_suggestions = suggestions
+            logger.info(f"Initial suggestions generated for user '{user.username}'")
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM suggestions for user '{user.username}': {e}")
+            user_state.initial_suggestions = []
+ 
+    except Exception as e:
+        logger.error(f"Background init failed for user '{user.username}': {e}")
+ 
+ 
 from app.state import clear_user_state
 
  

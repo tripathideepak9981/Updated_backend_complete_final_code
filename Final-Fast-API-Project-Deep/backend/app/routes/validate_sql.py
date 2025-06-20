@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from app.utils.auth_helpers import get_current_user
 from app.state import get_duckdb_connection
 from app.state import get_user_state  # ✅ updated import
+from app.models import User
+
 
 from app.utils.sql_helpers import execute_sql_query
 from app.utils.llm_helpers import generate_dynamic_response
@@ -20,16 +22,14 @@ router = APIRouter()
 
 class SQLValidationRequest(BaseModel):
     sql_query: str
-    original_question: str = ""  # Optional
 
 @router.post("/validate_sql")
 def validate_sql_query(
     request: SQLValidationRequest,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-    user_state = Depends(get_user_state)  # ✅ NEW
-
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
+    user_state = get_user_state(current_user.id)
     sql_query = request.sql_query.strip()
     logger.info(f"User {current_user.username} executed SQL validation: {sql_query}")
 
@@ -43,7 +43,7 @@ def validate_sql_query(
         }
 
     # ✅ Ensure data is loaded
-    if not user_state.get("table_names"):
+    if not user_state.table_names:
         return {
             "status": "error",
             "error_type": "NoDataLoaded",
@@ -52,11 +52,14 @@ def validate_sql_query(
 
     try:
         # ✅ Execute the query
-        if user_state.get("personal_engine"):
-            result_df = execute_sql_query(sql_query, request.original_question, user_state["personal_engine"])
+        if user_state.personal_engine:
+
+            result_df = execute_sql_query(sql_query, None, user_state.personal_engine)
+
         else:
-            con = get_duckdb_connection()
-            for table_name, df in user_state["table_names"]:
+            con = get_duckdb_connection(user_state)
+            for table_name, df in user_state.table_names:
+
                 con.register(table_name, df)
             result_df = con.execute(sql_query).df()
 
@@ -108,7 +111,7 @@ def validate_sql_query(
 
         try:
             result_text = generate_dynamic_response(
-                request.original_question or sql_query,
+                sql_query,
                 column_name,
                 value
             )

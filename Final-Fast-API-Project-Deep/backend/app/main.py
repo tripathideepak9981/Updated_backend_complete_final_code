@@ -1,3 +1,6 @@
+# app/main.py
+
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -37,6 +40,7 @@ app.include_router(query.router, prefix="/api")
 app.include_router(join.router, prefix="/api")
 app.include_router(modify.router, prefix="/api")
 app.include_router(validate_sql.router, prefix="/api", tags=["SQL Validation"])
+
 
 
 # ---------------- BACKGROUND CLEANER ---------------- #
