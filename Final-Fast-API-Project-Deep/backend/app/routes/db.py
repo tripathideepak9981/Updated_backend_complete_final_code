@@ -82,13 +82,14 @@ def load_tables(
     current_user: User = Depends(get_current_user)
 ):
     user_state = get_user_state(current_user.id)
-    if not user_state.get("personal_engine"):
+
+    if not getattr(user_state, "personal_engine", None):
         raise HTTPException(status_code=400, detail="No personal database connected.")
    
-    engine = user_state["personal_engine"]
+    engine = user_state.personal_engine
     previews = {}
     loaded_tables = []
- 
+
     for table in table_names:
         try:
             query = f"SELECT * FROM `{table}`;"
@@ -107,8 +108,8 @@ def load_tables(
             logger.error(f"Error fetching data for table '{table}': {e}")
             previews[table] = f"Error fetching data: {e}"
    
-    user_state["table_names"] = loaded_tables
- 
+    user_state.table_names = loaded_tables
+
     response = {
         "status": "tables loaded",
         "tables": table_names,
@@ -117,6 +118,7 @@ def load_tables(
     }
     logger.info(f"Final Response: {response}")
     return jsonable_encoder(response)
+
  
 @router.post("/disconnect")
 def disconnect(

@@ -58,6 +58,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+    
  
 def get_user_by_username(db: Session, username: str):
     return db.query(User).filter(User.username == username).first()

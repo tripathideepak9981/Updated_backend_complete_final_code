@@ -265,21 +265,21 @@ def load_tables_from_personal_db(engine, table_list: list) -> tuple:
     return loaded_tables, original_tables
 
 def disconnect_database(user_state):
-    if user_state.get("personal_engine"):
+    if getattr(user_state, "personal_engine", None):
         try:
-            user_state["personal_engine"].dispose()
+            user_state.personal_engine.dispose()
             print("Personal database disconnected.")
         except Exception as e:
             print(f"Error disconnecting personal database: {e}")
-        user_state["personal_engine"] = None
+        user_state.personal_engine = None
 
-    if user_state.get("mysql_connection"):
+    if getattr(user_state, "mysql_connection", None):
         try:
-            user_state["mysql_connection"].close()
+            user_state.mysql_connection.close()
             print("MySQL connection disconnected.")
         except Exception as e:
             print(f"Error disconnecting MySQL connection: {e}")
-        user_state["mysql_connection"] = None
+        user_state.mysql_connection = None
 
-    user_state["table_names"] = []
-    user_state["original_table_names"] = []
+    user_state.table_names = []
+    user_state.original_table_names = []
