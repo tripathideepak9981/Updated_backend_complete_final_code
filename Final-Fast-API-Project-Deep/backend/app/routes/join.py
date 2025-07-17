@@ -96,17 +96,11 @@ def join_tables(
 
     # ✅ Save to DB if engine exists
     engine = user_state.personal_engine
-    
-    logger.info(f"Engine for user {current_user.id}: {engine}")
-
     if engine:
         try:
-            logger.info(f"Saving joined table `{joined_name}` to DB...")
             joined_df.to_sql(joined_name, engine, index=False, if_exists="replace")
-            logger.info(f"Successfully saved `{joined_name}` to DB...")
         except Exception as e:
-            logger.error(f"Failed to save joined table to DB: {e}")
-            
+            logger.warning(f"Failed to save joined table to DB: {e}")
 
     return {
         "joined_table_name": joined_name,
