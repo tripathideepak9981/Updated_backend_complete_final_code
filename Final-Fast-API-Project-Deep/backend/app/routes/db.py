@@ -1,5 +1,3 @@
-# app/routes/db.py
- 
 from fastapi import APIRouter, HTTPException, Body, Depends
 from pydantic import BaseModel
 from typing import List
@@ -11,18 +9,14 @@ import pandas as pd
 import math
 from app.models import User
 from app.utils.auth_helpers import get_current_user
-from fastapi import HTTPException, APIRouter, Depends
 from sqlalchemy import text
-from app.utils.db_helpers import connect_personal_db
-from app.models import User
-from app.state import get_user_state
 from app.config import MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST
-import logging
- 
+
 router = APIRouter()
 logger = logging.getLogger("db")
 logger.setLevel(logging.DEBUG)
- 
+
+
 class DBConnectionParams(BaseModel):
     db_type: str
     host: str
@@ -30,7 +24,8 @@ class DBConnectionParams(BaseModel):
     user: str
     password: str
     database: str
- 
+
+
 def clean_nan(obj):
     """
     Recursively traverse lists and dictionaries, replacing any float('nan') with None.
@@ -46,7 +41,8 @@ def clean_nan(obj):
             return obj
     else:
         return obj
- 
+
+
 @router.post("/connect_db")
 def connect_db(
     params: DBConnectionParams,
@@ -67,7 +63,7 @@ def connect_db(
             raise HTTPException(status_code=500, detail="Database connection failed.")
 
         user_state = get_user_state(current_user.id)
-        user_state.personal_engine = engine  # ✅ CORRECT
+        user_state.personal_engine = engine  # ✅ Attribute access
 
         tables = list_tables(engine)
         logger.info(f"Connected successfully. Tables: {tables}")
@@ -75,7 +71,8 @@ def connect_db(
     except Exception as e:
         logger.exception("Error during connect_db")
         raise HTTPException(status_code=500, detail=f"Error connecting to DB: {e}")
- 
+
+
 @router.post("/load_tables")
 def load_tables(
     table_names: List[str] = Body(...),
@@ -83,9 +80,15 @@ def load_tables(
 ):
     user_state = get_user_state(current_user.id)
 
+<<<<<<< HEAD
     if not getattr(user_state, "personal_engine", None):
         raise HTTPException(status_code=400, detail="No personal database connected.")
    
+=======
+    if not hasattr(user_state, "personal_engine") or user_state.personal_engine is None:
+        raise HTTPException(status_code=400, detail="No personal database connected.")
+
+>>>>>>> 1444a5104f27541c334a187f9ebf852567db70bc
     engine = user_state.personal_engine
     previews = {}
     loaded_tables = []
@@ -96,7 +99,7 @@ def load_tables(
             df = pd.read_sql_query(query, engine)
             loaded_tables.append((table, df))
             logger.info(f"Fetched table '{table}' with shape: {df.shape}")
-           
+
             if df.empty:
                 logger.warning(f"Table {table} is empty.")
                 previews[table] = "No data available (table is empty)."
@@ -107,8 +110,13 @@ def load_tables(
         except Exception as e:
             logger.error(f"Error fetching data for table '{table}': {e}")
             previews[table] = f"Error fetching data: {e}"
+<<<<<<< HEAD
    
     user_state.table_names = loaded_tables
+=======
+
+    user_state.table_names = loaded_tables  # ✅ Attribute access
+>>>>>>> 1444a5104f27541c334a187f9ebf852567db70bc
 
     response = {
         "status": "tables loaded",
@@ -119,19 +127,20 @@ def load_tables(
     logger.info(f"Final Response: {response}")
     return jsonable_encoder(response)
 
+<<<<<<< HEAD
  
+=======
+
+>>>>>>> 1444a5104f27541c334a187f9ebf852567db70bc
 @router.post("/disconnect")
 def disconnect(
     current_user: User = Depends(get_current_user)
 ):
-    user_state = get_user_state(current_user.id)  # ✅ Fix here
-    disconnect_database(user_state)
+    user_state = get_user_state(current_user.id)
+    disconnect_database(user_state)  # ✅ Make sure this function also uses attributes
     return jsonable_encoder({"status": "disconnected"})
- 
- 
 
-logger = logging.getLogger(__name__)
- 
+
 @router.delete("/delete_table/{table_name}")
 def delete_table(table_name: str, current_user: User = Depends(get_current_user)):
     """
@@ -139,16 +148,16 @@ def delete_table(table_name: str, current_user: User = Depends(get_current_user)
     """
     # Use the custom connect_personal_db method to get the engine connection
     engine = connect_personal_db(
-        db_type="mysql",  # Using the same parameters as in other parts of the app
+        db_type="mysql",
         host=MYSQL_HOST,
         user=MYSQL_USER,
         password=MYSQL_PASSWORD,
         database=current_user.dynamic_db
     )
- 
+
     if not engine:
         raise HTTPException(status_code=500, detail="Failed to connect to database.")
- 
+
     # Check if the table exists in the database
     try:
         with engine.connect() as conn:
@@ -158,24 +167,24 @@ def delete_table(table_name: str, current_user: User = Depends(get_current_user)
     except Exception as e:
         logger.error(f"Error checking table existence: {e}")
         raise HTTPException(status_code=500, detail="Error checking table existence.")
- 
+
     # Attempt to delete the table
     try:
         with engine.connect() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS `{table_name}`"))
             logger.info(f"Table '{table_name}' deleted successfully for user {current_user.username}.")
-       
+
         # Remove the table from user's state (in-memory)
         user_state = get_user_state(current_user.id)
-        user_state.table_names = [t for t in user_state.table_names if t[0] != table_name]  # Remove table from state
-       
+        user_state.table_names = [t for t in user_state.table_names if t[0] != table_name]  # ✅ Attribute access
+
         return {"status": "success", "message": f"Table '{table_name}' deleted from database."}
-   
+
     except Exception as e:
         logger.error(f"Failed to delete table '{table_name}': {e}")
         raise HTTPException(status_code=500, detail="Failed to delete table.")
- 
- 
+
+
 @router.get("/load_user_tables_with_preview")
 def load_user_tables_with_preview(
     current_user: User = Depends(get_current_user)
@@ -229,7 +238,7 @@ def load_user_tables_with_preview(
         except Exception as e:
             logger.warning(f"Failed to load table '{table_name}': {e}")
 
-    user_state.table_names = loaded_tables
+    user_state.table_names = loaded_tables  # ✅ Attribute access
     user_state.original_table_names = original_tables
     user_state.personal_engine = engine
 
